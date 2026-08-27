@@ -11,7 +11,7 @@ mod hgvs_normalize;
 
 pub use hgvs_normalize::{
     convert_ins_to_dup, convert_ins_to_dup_noncoding, convert_ins_to_dup_range,
-    convert_ins_to_dup_range_noncoding, three_prime_shift_intronic,
+    convert_ins_to_dup_range_noncoding, three_prime_shift_genomic, three_prime_shift_intronic,
 };
 
 use anyhow::{Context, Result};
@@ -246,11 +246,7 @@ impl AnnotationContext {
     }
 
     /// Annotate VCF text and return JSON results.
-    pub fn annotate_vcf_text(
-        &self,
-        vcf_text: &str,
-        pick: bool,
-    ) -> Result<Vec<serde_json::Value>> {
+    pub fn annotate_vcf_text(&self, vcf_text: &str, pick: bool) -> Result<Vec<serde_json::Value>> {
         let mut vcf_parser = VcfParser::new(vcf_text.as_bytes())?;
         let mut variants = vcf_parser.read_all()?;
 
@@ -266,9 +262,10 @@ impl AnnotationContext {
             if overlapping.is_empty() {
                 annotate_intergenic(vf);
             } else {
-                let ref_seq = self.seq_provider.as_ref().and_then(|sp| {
-                    sp.fetch_sequence(chrom, query_start, query_end).ok()
-                });
+                let ref_seq = self
+                    .seq_provider
+                    .as_ref()
+                    .and_then(|sp| sp.fetch_sequence(chrom, query_start, query_end).ok());
 
                 let result = self.predictor.predict(
                     &vf.position,
@@ -279,8 +276,7 @@ impl AnnotationContext {
                 );
 
                 for tc in &result.transcript_consequences {
-                    let transcript =
-                        overlapping.iter().find(|t| t.stable_id == tc.transcript_id);
+                    let transcript = overlapping.iter().find(|t| t.stable_id == tc.transcript_id);
 
                     let allele_annotations: Vec<AlleleAnnotation> = tc
                         .allele_consequences
@@ -292,10 +288,7 @@ impl AnnotationContext {
                                 impact: ac.impact,
                                 cdna_position: zip_positions(ac.cdna_start, ac.cdna_end),
                                 cds_position: zip_positions(ac.cds_start, ac.cds_end),
-                                protein_position: zip_positions(
-                                    ac.protein_start,
-                                    ac.protein_end,
-                                ),
+                                protein_position: zip_positions(ac.protein_start, ac.protein_end),
                                 amino_acids: ac.amino_acids.clone(),
                                 codons: ac.codons.clone(),
                                 exon: ac.exon,
@@ -334,32 +327,33 @@ impl AnnotationContext {
                                             (vf.ref_allele.clone(), ac.allele.clone())
                                         };
                                     if let Some(coding_start) = tr.cdna_coding_start {
-                                        if let (Some(cs), Some(ce)) =
-                                            (ac.cdna_start, ac.cdna_end)
-                                        {
+                                        if let (Some(cs), Some(ce)) = (ac.cdna_start, ac.cdna_end) {
                                             let (cs, ce) = (cs.min(ce), cs.max(ce));
-                                            ann.hgvsc = fastvep_hgvs::hgvsc_with_seq(
-                                                &versioned_tid,
-                                                cs,
-                                                ce,
-                                                &hgvs_ref,
-                                                &hgvs_alt,
-                                                coding_start,
-                                                tr.cdna_coding_end,
-                                                tr.spliced_seq.as_deref(),
-                                                tr.codon_table_start_phase,
-                                            );
+                                            if let Some((hgvsc, offset)) =
+                                                fastvep_hgvs::hgvsc_with_seq_and_offset(
+                                                    &versioned_tid,
+                                                    cs,
+                                                    ce,
+                                                    &hgvs_ref,
+                                                    &hgvs_alt,
+                                                    coding_start,
+                                                    tr.cdna_coding_end,
+                                                    tr.spliced_seq.as_deref(),
+                                                    tr.codon_table_start_phase,
+                                                )
+                                            {
+                                                ann.hgvsc = Some(hgvsc);
+                                                ann.hgvs_offset = (offset > 0).then_some(offset);
+                                            }
                                         } else if ac.intron.is_some() {
                                             if let Some((cdna_pos, offset)) =
                                                 tr.genomic_to_intronic_cdna(vf.position.start)
                                             {
                                                 let (end_cdna, end_offset) =
                                                     if vf.position.start != vf.position.end {
-                                                        tr.genomic_to_intronic_cdna(
-                                                            vf.position.end,
-                                                        )
-                                                        .map(|(c, o)| (Some(c), Some(o)))
-                                                        .unwrap_or((None, None))
+                                                        tr.genomic_to_intronic_cdna(vf.position.end)
+                                                            .map(|(c, o)| (Some(c), Some(o)))
+                                                            .unwrap_or((None, None))
                                                     } else {
                                                         (None, None)
                                                     };
@@ -442,13 +436,11 @@ impl AnnotationContext {
                                                 ) {
                                                     let coding_start_idx =
                                                         (coding_start - 1) as usize;
-                                                    let spliced_bytes: &[u8] =
-                                                        spliced.as_bytes();
+                                                    let spliced_bytes: &[u8] = spliced.as_bytes();
                                                     let ref_from_cds =
                                                         &spliced_bytes[coding_start_idx..];
                                                     let cds_idx = (cds_s - 1) as usize;
-                                                    let mut alt_from_cds =
-                                                        ref_from_cds.to_vec();
+                                                    let mut alt_from_cds = ref_from_cds.to_vec();
                                                     if ac.allele == Allele::Deletion {
                                                         let del_len = vf.ref_allele.len();
                                                         let end = (cds_idx + del_len)
@@ -472,39 +464,31 @@ impl AnnotationContext {
                                                                 })
                                                                 .collect();
                                                         }
-                                                        for (j, &b) in
-                                                            bases.iter().enumerate()
-                                                        {
-                                                            if cds_idx + j
-                                                                <= alt_from_cds.len()
-                                                            {
-                                                                alt_from_cds
-                                                                    .insert(cds_idx + j, b);
+                                                        for (j, &b) in bases.iter().enumerate() {
+                                                            if cds_idx + j <= alt_from_cds.len() {
+                                                                alt_from_cds.insert(cds_idx + j, b);
                                                             }
                                                         }
                                                     }
                                                     let codon_start = cds_idx / 3;
-                                                    ann.hgvsp =
-                                                        fastvep_hgvs::hgvsp_frameshift(
-                                                            &versioned_pid,
-                                                            ref_from_cds,
-                                                            &alt_from_cds,
-                                                            codon_start,
-                                                        );
+                                                    ann.hgvsp = fastvep_hgvs::hgvsp_frameshift(
+                                                        &versioned_pid,
+                                                        ref_from_cds,
+                                                        &alt_from_cds,
+                                                        codon_start,
+                                                    );
                                                 }
                                             } else {
-                                                let ref_aa_byte = aa
-                                                    .0
-                                                    .as_bytes()
-                                                    .first()
-                                                    .copied()
-                                                    .unwrap_or(b'X');
-                                                let alt_aa_byte = aa
-                                                    .1
-                                                    .as_bytes()
-                                                    .first()
-                                                    .copied()
-                                                    .unwrap_or(b'X');
+                                                let ref_aa_byte =
+                                                    aa.0.as_bytes()
+                                                        .first()
+                                                        .copied()
+                                                        .unwrap_or(b'X');
+                                                let alt_aa_byte =
+                                                    aa.1.as_bytes()
+                                                        .first()
+                                                        .copied()
+                                                        .unwrap_or(b'X');
                                                 ann.hgvsp = fastvep_hgvs::hgvsp(
                                                     &versioned_pid,
                                                     ps,
@@ -540,11 +524,8 @@ impl AnnotationContext {
                             tsl: transcript.and_then(|t| t.tsl),
                             appris: transcript.and_then(|t| t.appris.clone()),
                             ccds: transcript.and_then(|t| t.ccds.clone()),
-                            gencode_primary: transcript
-                                .map(|t| t.gencode_primary)
-                                .unwrap_or(false),
-                            symbol_source: transcript
-                                .and_then(|t| t.gene.symbol_source.clone()),
+                            gencode_primary: transcript.map(|t| t.gencode_primary).unwrap_or(false),
+                            symbol_source: transcript.and_then(|t| t.gene.symbol_source.clone()),
                             hgnc_id: transcript.and_then(|t| t.gene.hgnc_id.clone()),
                             flags: transcript.map(|t| t.flags.clone()).unwrap_or_default(),
                         });
@@ -664,9 +645,7 @@ pub fn complement_allele(allele: &Allele) -> Allele {
 }
 
 /// Load supplementary annotation providers (.osa, .osa2 files) from a directory.
-pub fn load_sa_providers(
-    sa_dir: &Path,
-) -> Result<Vec<Mutex<Box<dyn AnnotationProvider>>>> {
+pub fn load_sa_providers(sa_dir: &Path) -> Result<Vec<Mutex<Box<dyn AnnotationProvider>>>> {
     use fastvep_sa::reader::SaReader;
     use fastvep_sa::reader_v2::Osa2Reader;
 

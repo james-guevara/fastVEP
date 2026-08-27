@@ -184,7 +184,38 @@ pub fn three_prime_shift_intronic(
     intron_genomic_start: u64,
     intron_genomic_end: u64,
 ) -> (u64, u64) {
+    three_prime_shift_genomic(
+        seq_provider,
+        chrom,
+        start,
+        end,
+        ref_allele,
+        alt_allele,
+        strand,
+        Some((intron_genomic_start, intron_genomic_end)),
+    )
+}
+
+/// Shift an indel in genomic sequence toward the transcript's 3' end.
+///
+/// This mirrors Ensembl VEP's `_genomic_shift`/`perform_shift`. VEP searches
+/// up to 1,000 genomic bases and performs this operation before projecting the
+/// shifted allele into transcript coordinates. Optional bounds preserve the
+/// legacy intron-only behavior for callers that require it.
+pub fn three_prime_shift_genomic(
+    seq_provider: &dyn SequenceProvider,
+    chrom: &str,
+    start: u64,
+    end: u64,
+    ref_allele: &fastvep_core::Allele,
+    alt_allele: &fastvep_core::Allele,
+    strand: fastvep_core::Strand,
+    bounds: Option<(u64, u64)>,
+) -> (u64, u64) {
     use fastvep_core::Allele;
+
+    let lower_bound = bounds.map(|value| value.0).unwrap_or(1);
+    let upper_bound = bounds.map(|value| value.1).unwrap_or(u64::MAX);
 
     match (ref_allele, alt_allele) {
         // Deletion: shift the deleted bases toward 3' end
@@ -194,9 +225,9 @@ pub fn three_prime_shift_intronic(
 
             match strand {
                 fastvep_core::Strand::Forward => {
-                    loop {
+                    for _ in 0..1000 {
                         let next_pos = e + 1;
-                        if next_pos > intron_genomic_end {
+                        if next_pos > upper_bound {
                             break;
                         }
                         let next_base = match seq_provider.fetch_sequence(chrom, next_pos, next_pos)
@@ -217,8 +248,8 @@ pub fn three_prime_shift_intronic(
                     }
                 }
                 fastvep_core::Strand::Reverse => {
-                    loop {
-                        if s == 0 || s - 1 < intron_genomic_start {
+                    for _ in 0..1000 {
+                        if s == 0 || s - 1 < lower_bound {
                             break;
                         }
                         let prev_pos = s - 1;
@@ -252,8 +283,8 @@ pub fn three_prime_shift_intronic(
             match strand {
                 fastvep_core::Strand::Forward => {
                     let mut shift_count = 0u64;
-                    loop {
-                        if pos > intron_genomic_end {
+                    for _ in 0..1000 {
+                        if pos > upper_bound {
                             break;
                         }
                         let check_base =
@@ -272,8 +303,8 @@ pub fn three_prime_shift_intronic(
                 }
                 fastvep_core::Strand::Reverse => {
                     let mut shift_count = 0u64;
-                    loop {
-                        if pos == 0 || pos - 1 < intron_genomic_start {
+                    for _ in 0..1000 {
+                        if pos == 0 || pos - 1 < lower_bound {
                             break;
                         }
                         let check_pos = pos - 1;
