@@ -8,7 +8,7 @@ use fastvep_cache::providers::{
     TabixVariationProvider, TranscriptProvider, VariationProvider,
 };
 use fastvep_consequence::ConsequencePredictor;
-use fastvep_core::{Allele, Consequence};
+use fastvep_core::{Allele, Consequence, Impact};
 use fastvep_hgvs;
 use fastvep_io::output;
 use fastvep_io::variant::{AlleleAnnotation, TranscriptVariation, VariationFeature};
@@ -21,6 +21,61 @@ use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 const BATCH_SIZE: usize = 1024;
+
+fn shifted_insertion_is_after_cds(
+    consequences: &[Consequence],
+    cds_end: Option<u64>,
+    hgvs_offset: Option<i64>,
+    coding_length: Option<u64>,
+) -> bool {
+    consequences.contains(&Consequence::FrameshiftVariant)
+        && matches!((cds_end, hgvs_offset, coding_length),
+            (Some(end), Some(offset), Some(length))
+                if offset > 0 && end.saturating_add(offset as u64) > length)
+}
+
+#[cfg(test)]
+mod terminal_insertion_tests {
+    use super::*;
+
+    #[test]
+    fn shifted_frameshift_insertion_beyond_cds_is_terminal() {
+        assert!(shifted_insertion_is_after_cds(
+            &[Consequence::FrameshiftVariant],
+            Some(1218),
+            Some(1),
+            Some(1218),
+        ));
+        assert!(shifted_insertion_is_after_cds(
+            &[Consequence::FrameshiftVariant],
+            Some(131),
+            Some(16),
+            Some(132),
+        ));
+    }
+
+    #[test]
+    fn ordinary_frameshifts_and_boundary_insertions_are_unchanged() {
+        assert!(!shifted_insertion_is_after_cds(
+            &[Consequence::FrameshiftVariant],
+            Some(100),
+            Some(3),
+            Some(300),
+        ));
+        assert!(!shifted_insertion_is_after_cds(
+            &[Consequence::FrameshiftVariant],
+            Some(299),
+            Some(1),
+            Some(300),
+        ));
+        assert!(!shifted_insertion_is_after_cds(
+            &[Consequence::InframeInsertion],
+            Some(300),
+            Some(1),
+            Some(300),
+        ));
+    }
+}
 
 pub struct AnnotateConfig {
     pub input: String,
@@ -803,6 +858,42 @@ pub fn run_annotate(config: AnnotateConfig) -> Result<()> {
                                 // emitted when transcript HGVS was generated.
                                 if ann.hgvsc.is_none() {
                                     ann.hgvs_offset = None;
+                                }
+
+                                // Consequence prediction precedes HGVS 3' shifting. A
+                                // repeat insertion can therefore look frameshifting at
+                                // its uploaded position even though its canonical
+                                // transcript representation is beyond the CDS and
+                                // leaves the stop codon intact. Match VEP by correcting
+                                // that terminal case after the authoritative offset is
+                                // available (for example c.1218dup at a 1218-base CDS).
+                                let coding_length = tr
+                                    .cdna_coding_start
+                                    .zip(tr.cdna_coding_end)
+                                    .map(|(start, end)| end.saturating_sub(start) + 1);
+                                let is_insertion = matches!(
+                                    (&vf.ref_allele, &ac.allele),
+                                    (Allele::Deletion, Allele::Sequence(_))
+                                );
+                                if is_insertion
+                                    && shifted_insertion_is_after_cds(
+                                        &ann.consequences,
+                                        ac.cds_end.or(ac.cds_start),
+                                        ann.hgvs_offset,
+                                        coding_length,
+                                    )
+                                {
+                                    ann.consequences
+                                        .retain(|c| *c != Consequence::FrameshiftVariant);
+                                    ann.consequences.push(Consequence::InframeInsertion);
+                                    ann.consequences.push(Consequence::StopRetainedVariant);
+                                    ann.consequences.sort_by_key(|c| c.rank());
+                                    ann.consequences.dedup();
+                                    ann.impact = Consequence::worst_impact(&ann.consequences)
+                                        .unwrap_or(Impact::Modifier);
+                                    ann.amino_acids = None;
+                                    ann.codons = None;
+                                    ann.protein_position = None;
                                 }
                             }
 
