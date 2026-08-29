@@ -38,7 +38,14 @@ fn coding_length_before_terminal_stop(
     cdna_coding_start: Option<u64>,
     cdna_coding_end: Option<u64>,
     translateable_seq: Option<&str>,
+    peptide: Option<&str>,
 ) -> Option<u64> {
+    if let Some(peptide) = peptide {
+        let amino_acids = peptide.strip_suffix('*').unwrap_or(peptide).len() as u64;
+        if amino_acids > 0 {
+            return Some(amino_acids * 3);
+        }
+    }
     let length = cdna_coding_start
         .zip(cdna_coding_end)
         .map(|(start, end)| end.saturating_sub(start) + 1)?;
@@ -99,12 +106,21 @@ mod terminal_insertion_tests {
     #[test]
     fn coding_boundary_excludes_a_confirmed_terminal_stop() {
         assert_eq!(
-            coding_length_before_terminal_stop(Some(10), Some(18), Some("ATGAAATAA")),
+            coding_length_before_terminal_stop(Some(10), Some(18), Some("ATGAAATAA"), None),
             Some(6),
         );
         assert_eq!(
-            coding_length_before_terminal_stop(Some(10), Some(18), Some("ATGAAAACA")),
+            coding_length_before_terminal_stop(Some(10), Some(18), Some("ATGAAAACA"), None),
             Some(9),
+        );
+        assert_eq!(
+            coding_length_before_terminal_stop(
+                Some(10),
+                Some(1230),
+                Some("not-used"),
+                Some(&format!("{}*", "A".repeat(406))),
+            ),
+            Some(1218),
         );
     }
 }
@@ -903,6 +919,7 @@ pub fn run_annotate(config: AnnotateConfig) -> Result<()> {
                                     tr.cdna_coding_start,
                                     tr.cdna_coding_end,
                                     tr.translateable_seq.as_deref(),
+                                    tr.peptide.as_deref(),
                                 );
                                 let is_insertion = matches!(
                                     (&vf.ref_allele, &ac.allele),
