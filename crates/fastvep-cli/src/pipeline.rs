@@ -34,6 +34,25 @@ fn shifted_insertion_is_after_cds(
                 if offset > 0 && end.saturating_add(offset as u64) > length)
 }
 
+fn coding_length_before_terminal_stop(
+    cdna_coding_start: Option<u64>,
+    cdna_coding_end: Option<u64>,
+    translateable_seq: Option<&str>,
+) -> Option<u64> {
+    let length = cdna_coding_start
+        .zip(cdna_coding_end)
+        .map(|(start, end)| end.saturating_sub(start) + 1)?;
+    let terminal_codon = translateable_seq?
+        .as_bytes()
+        .get(length.saturating_sub(3) as usize..length as usize)?;
+    let is_stop = matches!(terminal_codon, b"TAA" | b"TAG" | b"TGA");
+    Some(if is_stop {
+        length.saturating_sub(3)
+    } else {
+        length
+    })
+}
+
 #[cfg(test)]
 mod terminal_insertion_tests {
     use super::*;
@@ -74,6 +93,18 @@ mod terminal_insertion_tests {
             Some(1),
             Some(300),
         ));
+    }
+
+    #[test]
+    fn coding_boundary_excludes_a_confirmed_terminal_stop() {
+        assert_eq!(
+            coding_length_before_terminal_stop(Some(10), Some(18), Some("ATGAAATAA")),
+            Some(6),
+        );
+        assert_eq!(
+            coding_length_before_terminal_stop(Some(10), Some(18), Some("ATGAAAACA")),
+            Some(9),
+        );
     }
 }
 
@@ -867,10 +898,11 @@ pub fn run_annotate(config: AnnotateConfig) -> Result<()> {
                                 // leaves the stop codon intact. Match VEP by correcting
                                 // that terminal case after the authoritative offset is
                                 // available (for example c.1218dup at a 1218-base CDS).
-                                let coding_length = tr
-                                    .cdna_coding_start
-                                    .zip(tr.cdna_coding_end)
-                                    .map(|(start, end)| end.saturating_sub(start) + 1);
+                                let coding_length = coding_length_before_terminal_stop(
+                                    tr.cdna_coding_start,
+                                    tr.cdna_coding_end,
+                                    tr.translateable_seq.as_deref(),
+                                );
                                 let is_insertion = matches!(
                                     (&vf.ref_allele, &ac.allele),
                                     (Allele::Deletion, Allele::Sequence(_))
