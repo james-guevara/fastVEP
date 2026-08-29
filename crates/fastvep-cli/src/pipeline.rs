@@ -34,6 +34,14 @@ fn shifted_insertion_is_after_cds(
                 if offset > 0 && end.saturating_add(offset as u64) > length)
 }
 
+fn max_coordinate(start: Option<u64>, end: Option<u64>) -> Option<u64> {
+    match (start, end) {
+        (Some(start), Some(end)) => Some(start.max(end)),
+        (Some(value), None) | (None, Some(value)) => Some(value),
+        (None, None) => None,
+    }
+}
+
 fn coding_length_before_terminal_stop(
     cdna_coding_start: Option<u64>,
     cdna_coding_end: Option<u64>,
@@ -79,6 +87,12 @@ mod terminal_insertion_tests {
             Some(16),
             Some(132),
         ));
+    }
+
+    #[test]
+    fn insertion_boundary_uses_larger_coordinate_regardless_of_order() {
+        assert_eq!(max_coordinate(Some(1218), Some(1217)), Some(1218));
+        assert_eq!(max_coordinate(Some(130), Some(131)), Some(131));
     }
 
     #[test]
@@ -928,7 +942,7 @@ pub fn run_annotate(config: AnnotateConfig) -> Result<()> {
                                 if is_insertion
                                     && shifted_insertion_is_after_cds(
                                         &ann.consequences,
-                                        ac.cds_end.or(ac.cds_start),
+                                        max_coordinate(ac.cds_start, ac.cds_end),
                                         ann.hgvs_offset,
                                         coding_length,
                                     )
