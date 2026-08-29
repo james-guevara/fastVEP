@@ -42,10 +42,11 @@ fn coding_length_before_terminal_stop(
     let length = cdna_coding_start
         .zip(cdna_coding_end)
         .map(|(start, end)| end.saturating_sub(start) + 1)?;
-    let terminal_codon = translateable_seq?
-        .as_bytes()
-        .get(length.saturating_sub(3) as usize..length as usize)?;
-    let is_stop = matches!(terminal_codon, b"TAA" | b"TAG" | b"TGA");
+    let sequence = translateable_seq?.as_bytes();
+    let terminal_codon = sequence.get(sequence.len().saturating_sub(3)..)?;
+    let is_stop = terminal_codon.eq_ignore_ascii_case(b"TAA")
+        || terminal_codon.eq_ignore_ascii_case(b"TAG")
+        || terminal_codon.eq_ignore_ascii_case(b"TGA");
     Some(if is_stop {
         length.saturating_sub(3)
     } else {
