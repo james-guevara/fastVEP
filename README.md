@@ -2,6 +2,11 @@
 
 A high-performance Variant Effect Predictor written in Rust. fastVEP predicts the functional consequences of genomic variants (SNPs, insertions, deletions, structural variants) on genes, transcripts, and protein sequences, with direct integration of clinical and population databases.
 
+The `james-guevara/fastVEP` parity branch used by the rare-variant pipeline
+contains additional Ensembl VEP compatibility fixes. Its pinned revision,
+validation evidence, and performance measurements are documented in
+[`docs/g2mh-vep-parity.md`](docs/g2mh-vep-parity.md).
+
 fastVEP is inspired by and aims to be compatible with [Ensembl VEP](https://www.ensembl.org/info/docs/tools/vep/index.html) and [Illumina Nirvana](https://github.com/Illumina/Nirvana), while delivering significantly better performance through Rust's zero-cost abstractions and native parallelism.
 
 **Try it now:** A hosted web server is available at [fastVEP.org](https://fastVEP.org) — paste VCF data and get annotated results instantly, no installation required.
