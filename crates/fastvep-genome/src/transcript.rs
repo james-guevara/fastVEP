@@ -126,6 +126,19 @@ impl Transcript {
         (cds_pos - 1) / 3 + 1
     }
 
+    /// Sequence indexed by CDS coordinates, extended through the 3' UTR.
+    ///
+    /// Incomplete CDS starts have virtual N bases, just like translateable_seq
+    /// and cdna_to_cds. Omitting these bases shifts edits and can put a terminal
+    /// deletion beyond the sequence when constructing frameshift HGVS.
+    pub fn cds_sequence_with_utr(&self) -> Option<Vec<u8>> {
+        let start = self.cdna_coding_start?.checked_sub(1)? as usize;
+        let tail = self.spliced_seq.as_ref()?.as_bytes().get(start..)?;
+        let mut sequence = vec![b'N'; self.codon_table_start_phase as usize];
+        sequence.extend_from_slice(tail);
+        Some(sequence)
+    }
+
     /// Build spliced_seq, translateable_seq, and peptide from a FASTA reference.
     ///
     /// The `fetch_seq` closure takes (chrom, start, end) using 1-based inclusive
@@ -545,4 +558,39 @@ mod tests {
         // Peptide should start with M (Met)
         assert!(peptide.starts_with('M'), "peptide starts with: {}", &peptide[..1]);
     }
+    #[test]
+    fn test_cds_sequence_with_utr_preserves_phase_and_terminal_deletion() {
+        for phase in 0..=2 {
+            let mut tr = make_test_transcript();
+            tr.cdna_coding_start = Some(4);
+            tr.cdna_coding_end = Some(1003);
+            tr.codon_table_start_phase = phase;
+            tr.spliced_seq = Some(format!("AAA{}", "T".repeat(1000)));
+            let reference = tr.cds_sequence_with_utr().unwrap();
+            assert_eq!(reference.len(), 1000 + phase as usize);
+            assert_eq!(&reference[..phase as usize], vec![b'N'; phase as usize]);
+            let last_cds = tr.cdna_to_cds(1003).unwrap() as usize - 1;
+            assert_eq!(reference[last_cds], b'T');
+            let mut alternate = reference.clone();
+            alternate.drain(last_cds..last_cds + 1);
+            assert_eq!(alternate.len(), reference.len() - 1);
+            assert_eq!(alternate, reference[..last_cds]);
+            // Adding UTR does not change the CDS coordinate origin.
+            tr.spliced_seq.as_mut().unwrap().push_str("TAG");
+            let extended = tr.cds_sequence_with_utr().unwrap();
+            assert_eq!(&extended[..reference.len()], reference);
+            assert_eq!(&extended[reference.len()..], b"TAG");
+        }
+    }
+
+    #[test]
+    fn test_cds_sequence_with_utr_requires_valid_start() {
+        let mut tr = make_test_transcript();
+        tr.spliced_seq = Some("ACGT".into());
+        for start in [None, Some(0), Some(6)] {
+            tr.cdna_coding_start = start;
+            assert!(tr.cds_sequence_with_utr().is_none());
+        }
+    }
+
 }
