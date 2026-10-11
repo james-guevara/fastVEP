@@ -980,12 +980,10 @@ pub fn run_annotate(config: AnnotateConfig) -> Result<()> {
                                         if is_fs {
                                             // Frameshift: build alt sequence and scan for first changed AA + new stop
                                             // Use spliced_seq from CDS start onwards (includes 3'UTR for stop codon search)
-                                            if let (Some(ref spliced), Some(coding_start), Some(cds_s)) =
-                                                (&tr.spliced_seq, tr.cdna_coding_start, ac.cds_start)
+                                            if let (Some(ref_from_cds), Some(cds_s)) =
+                                                (tr.cds_sequence_with_utr(), ac.cds_start)
                                             {
                                                 // Extract from CDS start to end of spliced seq (includes 3'UTR)
-                                                let coding_start_idx = (coding_start - 1) as usize;
-                                                let ref_from_cds = &spliced.as_bytes()[coding_start_idx..];
                                                 let cds_idx = (cds_s - 1) as usize;
                                                 let mut alt_from_cds = ref_from_cds.to_vec();
 
@@ -1013,7 +1011,7 @@ pub fn run_annotate(config: AnnotateConfig) -> Result<()> {
                                                 let codon_start = cds_idx / 3;
                                                 ann.hgvsp = fastvep_hgvs::hgvsp_frameshift(
                                                     &versioned_pid,
-                                                    ref_from_cds,
+                                                    &ref_from_cds,
                                                     &alt_from_cds,
                                                     codon_start,
                                                 );
